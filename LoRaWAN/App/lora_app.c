@@ -90,11 +90,11 @@ typedef enum TxEventType_e
 /* USER CODE BEGIN PD */
 static const char *slotStrings[] = { "1", "2", "C", "C_MC", "P", "P_MC" };
 
-// --- NEW DEFINES FOR FIXED PAYLOAD ---
+// --- NEW DEFINES FOR PAYLOAD ---
 #define LORAWAN_APP_PORT_TX         2
-#define LPP_CHANNEL_TEMPERATURE     1 // Using channel 1 for temp
-#define LPP_CHANNEL_PACKET_COUNT    2 // Using channel 2 for counter
-#define TEMP_VALUE_CENTIC           5000 // 50.0 degrees Celsius * 100
+#define LPP_CHANNEL_TEMPERATURE     1 // Channel 1 for Temperature
+#define LPP_CHANNEL_PACKET_COUNT    2 // Channel 2 for counter
+#define LPP_CHANNEL_HUMIDITY        3 // Channel 3 for Humidity
 
 // We must define LORAMAC_HANDLER_UNCONFIRMED_MSG if it's not present in the includes
 #ifndef LORAMAC_HANDLER_UNCONFIRMED_MSG
@@ -104,9 +104,9 @@ static const char *slotStrings[] = { "1", "2", "C", "C_MC", "P", "P_MC" };
 
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
-#define TMP117_ADDR       (0x48 << 1)  // 8-bit address for HAL
-#define TMP117_REG_TEMP   0x00
-#define TMP117_REG_DEV_ID 0x0F
+// SHT45 Defines
+#define SHT45_ADDR                (0x44 << 1) // 8-bit address (0x44) for HAL
+#define SHT45_CMD_HIGH_PRECISION  0xFD        // Command for high precision measurement (17ms delay)
 /* USER CODE END PM */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -481,29 +481,44 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 
 /* Private functions ---------------------------------------------------------*/
 /* USER CODE BEGIN PrFD */
-static int TMP117_ReadRaw(int16_t *raw)
+/**
+  * @brief Reads Temperature and Humidity from SHT45.
+  * @param temp_centiC Pointer to store temperature in centi-degrees C.
+  * @param humid_centiPC Pointer to store humidity in centi-percent RH (0-10000).
+  * @retval 0 on success, -1 on failure.
+  */
+static int SHT45_ReadTempAndHumidity(int16_t *temp_centiC, uint16_t *humid_centiPC)
 {
-    uint8_t buf[2];
-    // NOTE: hi2c2 is an external variable from i2c.h. Assume it's initialized.
-    if (HAL_I2C_Mem_Read(&hi2c2, TMP117_ADDR, TMP117_REG_TEMP, I2C_MEMADD_SIZE_8BIT, buf, 2, 100) != HAL_OK)
-        return -1;
-    *raw = (int16_t)((buf[0] << 8) | buf[1]); // two’s complement
-    return 0;
-}
+    uint8_t cmd = SHT45_CMD_HIGH_PRECISION;
+    uint8_t rx_buf[6];
+    HAL_StatusTypeDef status;
 
+    // FIX: Using the hi2c2 handle, as hi2c1 was undeclared.
+    // You MUST ensure I2C2 is initialized and wired to the SHT45 sensor.
+    status = HAL_I2C_Master_Transmit(&hi2c2, SHT45_ADDR, &cmd, 1, 100);
+    if (status != HAL_OK) return -1;
 
+    // Wait for measurement (SHT45 high precision requires ~17ms)
+    HAL_Delay(20);
 
-static int TMP117_ReadCentiC(int16_t *centiC)
-{
-    int16_t raw;
-    if (TMP117_ReadRaw(&raw) != 0) return -1;
-    // 1 LSB = 0.0078125°C => raw / 128.0
-    float c = ((float)raw) / 128.0f;
-    // Convert to centi-degC (to send as int16)
-    int32_t tmp = (int32_t)(c * 100.0f);
-    if (tmp > 32767) tmp = 32767;
-    if (tmp < -32768) tmp = -32768;
-    *centiC = (int16_t)tmp;
+    // Read 6 bytes (Temp MSB, LSB, CRC | Humid MSB, LSB, CRC)
+    status = HAL_I2C_Master_Receive(&hi2c2, SHT45_ADDR, rx_buf, 6, 100);
+    if (status != HAL_OK) return -1;
+
+    // --- Temperature Processing ---
+    uint16_t temp_raw = (rx_buf[0] << 8) | rx_buf[1];
+
+    // Formula: T = -45 + 175 * (raw / 65535)
+    // T (centi-C) = -4500 + 17500 * (raw / 65535)
+    *temp_centiC = (int16_t)(-4500 + (17500UL * (uint32_t)temp_raw / 65535UL));
+
+    // --- Humidity Processing ---
+    uint16_t humid_raw = (rx_buf[3] << 8) | rx_buf[4];
+
+    // Formula: RH = -6 + 125 * (raw / 65535)
+    // RH (centi-%RH) = -600 + 12500 * (raw / 65535)
+    *humid_centiPC = (uint16_t)(-600 + (12500UL * (uint32_t)humid_raw / 65535UL));
+
     return 0;
 }
 /* USER CODE END PrFD */
@@ -597,34 +612,55 @@ static void SendTxData(void)
 	// Local buffer for LPP payload construction
     uint8_t txBuffer[LORAWAN_APP_DATA_BUFFER_MAX_SIZE];
 
-    // Fixed Temperature Value of 50.0°C (5000 centi-degrees)
-	int16_t fixed_temp_centiC = TEMP_VALUE_CENTIC;
+	// --- Start Sensor Reading and LPP Setup ---
+    // Variables to store sensor output
+    int16_t current_temp_centiC = 0;
+    uint16_t current_humid_centiPC = 0;
 
-    // Cayenne LPP uses 0.1°C units. 50.0 °C = 500 (0x01F4) tenths of a degree.
-    int16_t temp_value_tenths = (int16_t)(fixed_temp_centiC / 10);
+    // 1. Read temperature and humidity from SHT45
+    // Note: The failure to read here will cause the 'goto rearm' jump.
+	if (SHT45_ReadTempAndHumidity(&current_temp_centiC, &current_humid_centiPC) != 0)
+	{
+	  // Handle sensor read failure
+	  APP_LOG(TS_ON, VLEVEL_M, "SHT45 read failed. Skipping uplink this cycle.\r\n");
+	  goto rearm;
+	}
+
+    // LPP uses 0.1°C for Temperature (Type 103) and 0.5% for Humidity (Type 68).
+
+    // Temp: Convert centi-degrees to tenths of a degree.
+    int16_t temp_value_tenths = (int16_t)(current_temp_centiC / 10);
+
+    // Humid: Convert centi-%RH to half-percent (0-200 LPP range).
+    uint8_t humid_value_halfPC = (uint8_t)(current_humid_centiPC / 50);
 
     uint8_t i = 0;
 
-    // 1. Temperature 50.0C (Channel 1, Type 103/0x67)
+    // 2. Encode Temperature (Channel 1, Type 103/0x67)
     txBuffer[i++] = LPP_CHANNEL_TEMPERATURE; // Channel 1
     txBuffer[i++] = 103; // LPP Type Temperature (103/0x67)
-    txBuffer[i++] = (uint8_t)(temp_value_tenths >> 8); // Data MSB (0x01)
-    txBuffer[i++] = (uint8_t)(temp_value_tenths);      // Data LSB (0xF4)
+    txBuffer[i++] = (uint8_t)(temp_value_tenths >> 8); // Data MSB
+    txBuffer[i++] = (uint8_t)(temp_value_tenths);      // Data LSB
 
-    // 2. Packet Counter (Channel 2, Type 115/0x73 - Unsigned 16-bit Integer)
+    // 3. Encode Humidity (Channel 3, Type 68/0x44)
+    txBuffer[i++] = LPP_CHANNEL_HUMIDITY; // Channel 3
+    txBuffer[i++] = 68; // LPP Type Relative Humidity (68/0x44)
+    txBuffer[i++] = humid_value_halfPC; // Data (1 byte)
+
+    // 4. Encode Packet Counter (Channel 2, Type 115/0x73 - Unsigned 16-bit Integer)
     txBuffer[i++] = LPP_CHANNEL_PACKET_COUNT; // Channel 2
     txBuffer[i++] = 115; // LPP Type Unsigned Integer (115)
     txBuffer[i++] = (uint8_t)(g_pkt_cnt >> 8); // Data MSB
     txBuffer[i++] = (uint8_t)(g_pkt_cnt);      // Data LSB
 
-    // --- END Manual LPP Encoding ---
+    // --- End Sensor Reading and LPP Setup ---
 
     AppData.Port       = LORAWAN_APP_PORT_TX;
     AppData.BufferSize = i;
     memcpy(AppData.Buffer, txBuffer, i);
 
-	/* --- START OF DEBUG PRINT ADDITION --- */
-	APP_LOG(TS_ON, VLEVEL_M, "Uplink Data Preparation (FIXED Payload):\r\n");
+	/* --- DEBUG PRINT --- */
+	APP_LOG(TS_ON, VLEVEL_M, "Uplink Data Preparation (SHT45 Read):\r\n");
 	APP_LOG(TS_OFF, VLEVEL_M, "  Port: %d, Length: %d\r\n", AppData.Port, AppData.BufferSize);
 
 	// Print raw hex bytes of the payload
@@ -636,9 +672,10 @@ static void SendTxData(void)
 	APP_LOG(TS_OFF, VLEVEL_M, "\r\n");
 
 	// Print human-readable values
-	APP_LOG(TS_OFF, VLEVEL_M, "  Temperature: %.1f degC (Fixed)\r\n", ((float)temp_value_tenths) / 10.0f);
+	APP_LOG(TS_OFF, VLEVEL_M, "  Temperature: %.2f degC\r\n", ((float)current_temp_centiC) / 100.0f);
+    APP_LOG(TS_OFF, VLEVEL_M, "  Humidity: %.2f %%RH\r\n", ((float)current_humid_centiPC) / 100.0f);
 	APP_LOG(TS_OFF, VLEVEL_M, "  Packet Count: %u\r\n", (unsigned)g_pkt_cnt);
-	/* --- END OF DEBUG PRINT ADDITION --- */
+	/* --- END DEBUG PRINT --- */
 
 	/* Stop the join blinking once joined */
 	if ((JoinLedTimer.IsRunning) && (LmHandlerJoinStatus() == LORAMAC_HANDLER_SET))
@@ -648,13 +685,14 @@ static void SendTxData(void)
 	}
 
 	/* Send unconfirmed by current config (LmHandlerParams.IsTxConfirmed) */
-    // FIX: Changed LmHandlerSend to the 3-argument version based on compilation constraints.
+    // Using the 3-argument signature (appData, type, nextTxIn)
 	status = LmHandlerSend(&AppData, LmHandlerParams.IsTxConfirmed, NULL);
 
 	if (LORAMAC_HANDLER_SUCCESS == status)
 	{
 	  g_pkt_cnt++; /* increment only on successful enqueue */
-	  APP_LOG(TS_ON, VLEVEL_L, "Uplink: t=50.0C (Fixed), pkt=%u - Frame Enqueued\r\n", (unsigned)g_pkt_cnt);
+	  APP_LOG(TS_ON, VLEVEL_L, "Uplink: T=%.2fC, H=%.2f%%, pkt=%u - Frame Enqueued\r\n",
+              ((float)current_temp_centiC) / 100.0f, ((float)current_humid_centiPC) / 100.0f, (unsigned)g_pkt_cnt);
 	}
 	else if (LORAMAC_HANDLER_DUTYCYCLE_RESTRICTED == status)
 	{
@@ -669,10 +707,10 @@ static void SendTxData(void)
     	APP_LOG(TS_ON, VLEVEL_M, "Uplink Frame Enqueue Failed (Status: %d)\r\n", (int)status);
     }
 
+	rearm:; // Label for the goto jump on failure
 	if (EventType == TX_ON_TIMER)
 	{
 	  UTIL_TIMER_Stop(&TxTimer);
-      // Use nextTxIn to respect duty cycle if needed
 	  UTIL_TIMER_SetPeriod(&TxTimer, MAX(nextTxIn, TxPeriodicity));
 	  UTIL_TIMER_Start(&TxTimer);
 	}
@@ -1007,6 +1045,3 @@ static void OnRestoreContextRequest(void *nvm, uint32_t nvm_size)
 
   /* USER CODE END OnRestoreContextRequest_Last */
 }
-
-
-// ... (The rest of the file is unchanged, but included for completeness)

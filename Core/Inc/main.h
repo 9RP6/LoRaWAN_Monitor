@@ -60,8 +60,8 @@ void Error_Handler(void);
 #define RTC_N_PREDIV_S 10
 #define RTC_PREDIV_S ((1<<RTC_N_PREDIV_S)-1)
 #define RTC_PREDIV_A ((1<<(15-RTC_N_PREDIV_S))-1)
-#define LED1_Pin GPIO_PIN_15
-#define LED1_GPIO_Port GPIOB
+#define LED1_Pin GPIO_PIN_11
+#define LED1_GPIO_Port GPIOA
 #define LED2_Pin GPIO_PIN_9
 #define LED2_GPIO_Port GPIOB
 #define PROB3_Pin GPIO_PIN_14

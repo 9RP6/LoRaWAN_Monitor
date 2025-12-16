@@ -49,7 +49,7 @@ extern "C" {
 /* USER CODE END EC_CAYENNE_LPP */
 
 /*!
- * Defines the application data transmission duty cycle. 10s, value in [ms].
+ * Defines the application data transmission duty cycle. 3s, value in [ms].
  */
 #define APP_TX_DUTYCYCLE                            3000
 
