@@ -110,7 +110,7 @@ extern "C" {
 /*!
  * Network root key
  */
-#define LORAWAN_NWK_KEY                                    70,d6,c6,64,ec,4a,69,24,25,30,a4,da,8e,38,a3,3
+#define LORAWAN_NWK_KEY                                    70,d6,c6,64,ec,4a,69,24,25,30,a4,da,8e,38,a3,31
 
 /*!
  * Forwarding Network session key
