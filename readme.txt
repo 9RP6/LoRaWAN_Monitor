@@ -1,23 +1,28 @@
+
+# LoRaWAN-Based Beehive Monitoring System (UCR)
+
+This project implements a long-range, low-power temperature and humidity monitoring system for the UCR beehives. It replaces a legacy Bluetooth Low Energy (BLE) system that suffered from range limitations, hardware theft, and high maintenance requirements.
+
 ## 1. System Overview
 
-The system replaces a high-maintenance Bluetooth Low Energy (BLE) setup that suffered from range limitations (requiring gateways to be placed near hives, leading to theft) and high power consumption (~200mA peak). The new LoRaWAN architecture uses a Long Range (LoRa) radio link to allow the gateway to be placed in a secure location far from the apiary.
+The architecture is designed for remote, infrastructure-less environments where cellular signals are non-existent and fixed power is unavailable.
 
-### Core Components
+### Technical Specifications
 
 * 
 **End Node:** LoRa-E5 (WLE5JC) Development Board (ARM Cortex-M4 + LoRa SoC).
 
 
 * 
-**Sensor:** Sensirion SHT45 (High-precision Temperature/Humidity) connected via I2C.
+**Sensor:** Sensirion SHT45 connected via I2C (Pins PA15/PB14).
 
 
 * 
-**Gateway:** Raspberry Pi 4 + WM1302 LoRaWAN Hat (SX1302 chipset).
+**Gateway:** Raspberry Pi 4 + WM1302 LoRaWAN Hat (915 MHz US Band).
 
 
 * 
-**Software:** STM32CubeWL SDK, Semtech Packet Forwarder, and ChirpStack Network Server.
+**Backend:** ChirpStack LoRaWAN Network Server.
 
 
 
@@ -25,76 +30,78 @@ The system replaces a high-maintenance Bluetooth Low Energy (BLE) setup that suf
 
 ## 2. Hardware Assembly
 
-### Sensor Wiring
+### Sensor Wiring (End Node)
 
-The Sensirion SHT45 communicates with the LoRa-E5 via the I2C2 peripheral.
+The Sensirion SHT45 uses the I2C2 peripheral for communication.
 
-1. Connect **VIN** on the SHT45 to **3V3** on the LoRa-E5 board.
-
-
-2. Connect **GND** to **GND**.
-
-
-3. Connect **SCL** to **PB14** (I2C2 SCL).
+1. **VIN** on SHT45  **3V3** on LoRa-E5.
+2. **GND** on SHT45  **GND** on LoRa-E5.
+3. 
+**SCL** on SHT45  **PB14** (I2C2 SCL) on LoRa-E5.
 
 
-4. Connect **SDA** to **PA15** (I2C2 SDA).
+4. 
+**SDA** on SHT45  **PA15** (I2C2 SDA) on LoRa-E5.
 
 
 
-### Gateway Setup
+### Gateway Assembly
 
 1. Mount the **WM1302 Hat** onto the Raspberry Pi 4 GPIO headers.
 
 
-2. Connect the **915 MHz antenna** to the U.FL/SMA connector on the Hat.
+2. Connect the **915 MHz high-gain antenna** to the U.FL/SMA connector.
 
 
-* *Warning:* Never power the gateway without the antenna attached, as it can damage the concentrator chip.
+* 
+*Critical:* Do not power the Pi without an antenna attached, as it can damage the SX1302 concentrator.
 
 
-3. Connect the Pi to the internet via **Ethernet or Wi-Fi** for the backhaul.
 
 
 
 ---
 
-## 3. Firmware Development
+## 3. Firmware Configuration
 
-The firmware is built on the `LoRaWAN_End_Node` example from the STM32WL SDK.
+The firmware is built using the **STM32CubeWL Middleware**.
 
-### Low Power Configuration
+### Power Optimization
 
-To ensure the battery lasts longer than the previous 14-day limit, the MCU must enter **Stop2 Mode** between measurement cycles.
+To avoid the bi-weekly battery swaps of the old system (which caused thermal shock to the bees), the node must be ultra-low power.
 
-* Use the `stm32_seq.h` sequencer to schedule tasks without using a full RTOS.
-
-
-* Ensure all unused GPIOs are set to Analog mode to minimize leakage current.
+* 
+**MCU State:** Program the MCU to enter **Stop2 Mode** between tasks.
 
 
+* 
+**Sequencer:** Use `stm32_seq.h` to manage measurement and transmission tasks without RTOS overhead.
 
-### Sensor Logic (`lora_app.c`)
+
+
+### Measurement Logic (`lora_app.c`)
 
 1. 
-**Command:** Issue the `0xFD` command for a high-precision measurement.
+**Command:** Send measurement command `0xFD` (High-Precision) via `HAL_I2C_Master_Transmit`.
 
 
 2. 
-**Timing:** Use a **20ms non-blocking delay** to allow the sensor to finish conversion.
+**Delay:** Implement a **20ms non-blocking delay** for sensor conversion.
 
 
 3. 
-**Data Integrity:** Read 6 bytes from the sensor; verify the **CRC-8 checksums** for both temperature and humidity.
+**Read:** Receive 6 bytes via `HAL_I2C_Master_Receive` and verify the **CRC-8 checksums**.
 
 
 
-### Payload Structure
+---
 
-To minimize Time-on-Air (ToA) and save energy, use the **Cayenne LPP** format:
+## 4. Data Uplink & Payload
+
+To minimize Time-on-Air (ToA) and energy consumption, use the **Cayenne LPP** format.
 
 * 
-**Channel 1 (Type 103):** Temperature (Value  10).
+**Channel 1 (Type 103):** Temperature (Precision: $0.1^{\circ}$C).
 
 
 * 
@@ -102,67 +109,77 @@ To minimize Time-on-Air (ToA) and save energy, use the **Cayenne LPP** format:
 
 
 * 
-*Security:* The stack automatically applies **AES-128 encryption** to the payload.
+**Security:** Payloads are automatically **AES-128 encrypted** by the stack.
 
 
 
 ---
 
-## 4. Gateway and Backend Configuration
+## 5. Gateway & Network Server (ChirpStack)
 
-### Packet Forwarder
+### Semtech Packet Forwarder
 
-The Raspberry Pi runs the **Semtech Packet Forwarder**, which bridges RF packets to IP packets (UDP/JSON).
+The Raspberry Pi bridges RF packets to the internet.
 
-1. Configure `global_conf.json` with the correct frequency plan (US915 for UCR).
-
-
-2. Ensure the Gateway ID in the config matches the one registered in ChirpStack.
+1. Enable **SPI** on the Raspberry Pi.
+2. Configure the packet forwarder to listen to the SX1302 chip.
 
 
+3. Point the forwarder to your ChirpStack instance.
 
-### ChirpStack Decoding
 
-In the ChirpStack web console, add a **Javascript Codec** to decode the hex payload.
+
+### Custom Payload Decoder (JavaScript)
+
+In the ChirpStack console, use a decoder to reconstruct the 16-bit signed integer into a decimal value.
 
 ```javascript
-// Example decoder logic
 function decodeUplink(input) {
-  var temp = (input.bytes[2] << 8 | input.bytes[3]) / 10.0; [cite_start]// Channel 1 [cite: 64, 65]
-  return { data: { temperature: temp } };
+  // Map Channel 1 (Temperature)
+  var temp = (input.bytes[2] << 8 | input.bytes[3]) / 10.0;
+  return {
+    data: { temperature: temp }
+  };
 }
 
 ```
 
 ---
 
-## 5. Testing and Validation
+## 6. Testing & Validation
 
 1. 
-**OTAA Handshake:** Monitor the ChirpStack console during power-up to ensure a successful Join-Request/Join-Accept cycle.
+**OTAA Handshake:** Confirm "Join Request/Accept" in the ChirpStack console and the ST-LINK debugger.
 
 
 2. 
-**Thermal Test:** Blow warm air onto the SHT45 and verify the real-time data spike in the backend.
+**Thermal Variance:** Introduce a heat source near the sensor and observe immediate shifts in the server packets.
 
 
 3. 
-**Range Check:** Expect a **Packet Delivery Rate (PDR)** of roughly 25% at 30 meters in non-line-of-sight conditions; the 3-second uplink frequency provides sufficient redundancy to handle this loss.
+**Redundancy:** Note that while range increases packet loss (e.g., 25% PDR at 30m), the 3-second uplink frequency maintains a consistent data curve.
 
 
 
 ---
 
-## 6. Future Improvements
+## 7. Future Roadmap
 
 * 
-**Energy Harvesting:** Integrate a solar panel to eliminate battery swaps entirely.
-
-
-* 
-**Edge AI:** Implement local anomaly detection on the STM32WL to only transmit data when a temperature deviation is detected.
+**Solar Integration:** Add energy harvesting for infinite autonomy.
 
 
 * 
-**Visualization:** Connect ChirpStack to **InfluxDB and Grafana** for professional-grade analytics.
+**Edge Intelligence:** Perform local anomaly detection on the Cortex-M4 to reduce transmission frequency.
 
+
+* 
+**Visualization:** Bridge the backend with **InfluxDB** and **Grafana** for professional analytics.
+
+
+
+---
+
+**Advisor:** Dr. Hyoseung Kim **Location:** University of California, Riverside (UCR) 
+
+Would you like me to generate a specific `global_conf.json` template for the gateway configuration?
