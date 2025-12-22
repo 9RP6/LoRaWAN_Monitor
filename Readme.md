@@ -185,4 +185,3 @@ function decodeUplink(input) {
 
 **Advisor:** Dr. Hyoseung Kim **Location:** University of California, Riverside (UCR) 
 
-Would you like me to generate a specific `global_conf.json` template for the gateway configuration?
