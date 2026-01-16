@@ -12,15 +12,15 @@ The architecture is designed for remote, infrastructure-less environments where 
 
 ### Technical Specifications
 
-* 
+
 **End Node:** LoRa-E5 (WLE5JC) Development Board (ARM Cortex-M4 + LoRa SoC).
 
 
-* 
+
 **Sensor:** Sensirion SHT45 connected via I2C (Pins PA15/PB14).
 
 
-* 
+
 **Gateway:** Raspberry Pi 4 + WM1302 LoRaWAN Hat (915 MHz US Band).
 
 
@@ -39,12 +39,10 @@ The Sensirion SHT45 uses the I2C2 peripheral for communication.
 
 1. **VIN** on SHT45  **3V3** on LoRa-E5.
 2. **GND** on SHT45  **GND** on LoRa-E5.
-3. 
-**SCL** on SHT45  **PB14** (I2C2 SCL) on LoRa-E5.
+3. **SCL** on SHT45  **PB14** (I2C2 SCL) on LoRa-E5.
 
 
-4. 
-**SDA** on SHT45  **PA15** (I2C2 SDA) on LoRa-E5.
+4. **SDA** on SHT45  **PA15** (I2C2 SDA) on LoRa-E5.
 
 
 
@@ -56,7 +54,7 @@ The Sensirion SHT45 uses the I2C2 peripheral for communication.
 2. Connect the **915 MHz high-gain antenna** to the U.FL/SMA connector.
 
 
-* 
+
 *Critical:* Do not power the Pi without an antenna attached, as it can damage the SX1302 concentrator.
 
 
@@ -73,27 +71,24 @@ The firmware is built using the **STM32CubeWL Middleware**.
 
 To avoid the bi-weekly battery swaps of the old system (which caused thermal shock to the bees), the node must be ultra-low power.
 
-* 
+
 **MCU State:** Program the MCU to enter **Stop2 Mode** between tasks.
 
 
-* 
+  
 **Sequencer:** Use `stm32_seq.h` to manage measurement and transmission tasks without RTOS overhead.
 
 
 
 ### Measurement Logic (`lora_app.c`)
 
-1. 
-**Command:** Send measurement command `0xFD` (High-Precision) via `HAL_I2C_Master_Transmit`.
+1. **Command:** Send measurement command `0xFD` (High-Precision) via `HAL_I2C_Master_Transmit`.
 
 
-2. 
-**Delay:** Implement a **20ms non-blocking delay** for sensor conversion.
+2. **Delay:** Implement a **20ms non-blocking delay** for sensor conversion.
 
 
-3. 
-**Read:** Receive 6 bytes via `HAL_I2C_Master_Receive` and verify the **CRC-8 checksums**.
+3. **Read:** Receive 6 bytes via `HAL_I2C_Master_Receive` and verify the **CRC-8 checksums**.
 
 
 
@@ -103,15 +98,15 @@ To avoid the bi-weekly battery swaps of the old system (which caused thermal sho
 
 To minimize Time-on-Air (ToA) and energy consumption, use the **Cayenne LPP** format.
 
-* 
+
 **Channel 1 (Type 103):** Temperature (Precision: $0.1^{\circ}$C).
 
 
-* 
+
 **Channel 2 (Type 115):** Packet Counter.
 
 
-* 
+
 **Security:** Payloads are automatically **AES-128 encrypted** by the stack.
 
 
@@ -126,8 +121,6 @@ The Raspberry Pi bridges RF packets to the internet.
 
 1. Enable **SPI** on the Raspberry Pi.
 2. Configure the packet forwarder to listen to the SX1302 chip.
-
-
 3. Point the forwarder to your ChirpStack instance.
 
 
@@ -151,16 +144,13 @@ function decodeUplink(input) {
 
 ## 6. Testing & Validation
 
-1. 
-**OTAA Handshake:** Confirm "Join Request/Accept" in the ChirpStack console and the ST-LINK debugger.
+1. **OTAA Handshake:** Confirm "Join Request/Accept" in the ChirpStack console and the ST-LINK debugger.
 
 
-2. 
-**Thermal Variance:** Introduce a heat source near the sensor and observe immediate shifts in the server packets.
+2. **Thermal Variance:** Introduce a heat source near the sensor and observe immediate shifts in the server packets.
 
 
-3. 
-**Redundancy:** Note that while range increases packet loss (e.g., 25% PDR at 30m), the 3-second uplink frequency maintains a consistent data curve.
+3. **Redundancy:** Note that while range increases packet loss (e.g., 25% PDR at 30m), the 3-second uplink frequency maintains a consistent data curve.
 
 
 
@@ -168,15 +158,15 @@ function decodeUplink(input) {
 
 ## 7. Future Roadmap
 
-* 
+
 **Solar Integration:** Add energy harvesting for infinite autonomy.
 
 
-* 
+
 **Edge Intelligence:** Perform local anomaly detection on the Cortex-M4 to reduce transmission frequency.
 
 
-* 
+
 **Visualization:** Bridge the backend with **InfluxDB** and **Grafana** for professional analytics.
 
 
